@@ -1,0 +1,18 @@
+{
+	"name": "pi-minimax-m3",
+	"version": "0.1.0",
+	"private": true,
+	"description": "MiniMax-M3 on the OpenAI-compatible endpoint with passive caching, plus a thinking-strip hook for current pi-ai versions that predate the upstream skipThinkingBlock compat flag.",
+	"type": "module",
+	"keywords": ["pi-package", "minimax", "minimax-m3", "caching"],
+	"license": "MIT",
+	"scripts": {
+		"check": "tsc -p tsconfig.json"
+	},
+	"pi": {
+		"extensions": ["./index.ts"]
+	},
+	"devDependencies": {
+		"typescript": "5.6.3"
+	}
+}

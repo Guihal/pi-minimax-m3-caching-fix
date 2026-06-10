@@ -9,9 +9,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
-- Initial release. Registers two providers (`minimax-m3`, `minimax-cn-m3`)
-  exposing `MiniMax-M3` on the OpenAI-compatible endpoint so passive prompt
-  caching works.
+- Initial release. Registers two providers (`minimax-m3-cache-fixed`,
+  `minimax-cn-m3-cache-fixed`) exposing `MiniMax-M3` on the OpenAI-compatible
+  endpoint so passive prompt caching works.
 - `message_end` hook that strips duplicated thinking output (the
   `<think>…</think>` markers M3 sends alongside the proper thinking block)
   for messages from the two registered providers.

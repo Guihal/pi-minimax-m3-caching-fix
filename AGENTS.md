@@ -31,8 +31,8 @@ Local install is reversible; doesn't pollute the user's global package list.
 ```bash
 mkdir -p /tmp/pi-m3-test && cd /tmp/pi-m3-test
 pi install -l /Users/wese/Repos/github.com/rwese/pi-minimax-m3-caching-fix
-pi --provider minimax-m3 --model MiniMax-M3 --session-id my-test-1 -p "We are testing prompt caching. Acknowledge briefly."
-pi --provider minimax-m3 --model MiniMax-M3 -c -p "What are we testing?"
+pi --provider minimax-m3-cache-fixed --model MiniMax-M3 --session-id my-test-1 -p "We are testing prompt caching. Acknowledge briefly."
+pi --provider minimax-m3-cache-fixed --model MiniMax-M3 -c -p "What are we testing?"
 # session log: /Users/wese/.pi/agent/sessions/--private-tmp-pi-m3-test--/*my-test-1*.jsonl
 ```
 
@@ -67,11 +67,11 @@ PLAN-DELTA.md documents the choice and the trade-off (brief visual flash during 
 
 ### 2. `pi.registerProvider(name, { models })` REPLACES all models for that provider
 
-Overriding the built-in `minimax` provider would wipe M2.x. Use distinct names (`minimax-m3`, `minimax-cn-m3`) and document in README that two `MiniMax-M3` entries appear in `/model` — pick the one with `(cache-fixed)` in the name.
+Overriding the built-in `minimax` provider would wipe M2.x. Use distinct names (`minimax-m3-cache-fixed`, `minimax-cn-m3-cache-fixed`) and document in README that two `MiniMax-M3` entries appear in `/model` — pick the one with `(cache-fixed)` in the name.
 
 ### 3. Provider registration requires the env var to be set for the provider to appear
 
-`ModelRegistry.hasConfiguredAuth()` checks `isConfigValueConfigured(providerApiKey)`. If the env var referenced by `$MINIMAX_CN_API_KEY` is unset, the `minimax-cn-m3` provider is silently dropped from `pi --list-models`. This is intentional; users without CN auth don't see the CN option. To verify both providers, set both env vars (or set `MINIMAX_CN_API_KEY=dummy` for testing).
+`ModelRegistry.hasConfiguredAuth()` checks `isConfigValueConfigured(providerApiKey)`. If the env var referenced by `$MINIMAX_CN_API_KEY` is unset, the `minimax-cn-m3-cache-fixed` provider is silently dropped from `pi --list-models`. This is intentional; users without CN auth don't see the CN option. To verify both providers, set both env vars (or set `MINIMAX_CN_API_KEY=dummy` for testing).
 
 ### 4. `message_end` can replace the final message but `message_update` cannot
 

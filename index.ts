@@ -13,8 +13,8 @@
  * thinking-duplication bug — is the upstream fix in `pi-mono@b85b91c9`.
  *
  * This extension reproduces the routing fix for any pi version: it registers
- * two new providers (`minimax-m3`, `minimax-cn-m3`) that point at the
- * OpenAI-compatible M3 base URLs.
+ * two new providers (`minimax-m3-cache-fixed`, `minimax-cn-m3-cache-fixed`)
+ * that point at the OpenAI-compatible M3 base URLs.
  *
  * Why a separate provider (not overriding the built-in)
  * -----------------------------------------------------
@@ -52,7 +52,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage, TextContent, ThinkingContent } from "@earendil-works/pi-ai";
 
 /** Provider names this extension owns. */
-const OWN_PROVIDERS = new Set(["minimax-m3", "minimax-cn-m3"]);
+const OWN_PROVIDERS = new Set(["minimax-m3-cache-fixed", "minimax-cn-m3-cache-fixed"]);
 
 /**
  * MiniMax-M3 model metadata.
@@ -149,14 +149,14 @@ function isThinkingBlock(block: unknown): block is ThinkingContent {
 export default function (pi: ExtensionAPI) {
 	// --- Provider registration (T2: passive-cache routing) -----------------
 
-	pi.registerProvider("minimax-m3", {
+	pi.registerProvider("minimax-m3-cache-fixed", {
 		baseUrl: "https://api.minimax.io/v1",
 		apiKey: "$MINIMAX_API_KEY",
 		api: "openai-completions",
 		models: [makeM3Model("")],
 	});
 
-	pi.registerProvider("minimax-cn-m3", {
+	pi.registerProvider("minimax-cn-m3-cache-fixed", {
 		baseUrl: "https://api.minimaxi.com/v1",
 		apiKey: "$MINIMAX_CN_API_KEY",
 		api: "openai-completions",

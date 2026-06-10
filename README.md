@@ -13,8 +13,9 @@ issues with the built-in **MiniMax-M3** integration:
    in `content` wrapped in `<think>…</think>` markers (which would otherwise
    appear inside the visible text).
 
-This extension registers two new providers — `minimax-m3` and `minimax-cn-m3`
-— that route MiniMax-M3 to the OpenAI-compatible endpoint so passive caching
+This extension registers two new providers — `minimax-m3-cache-fixed` and
+`minimax-cn-m3-cache-fixed` — that route MiniMax-M3 to the OpenAI-compatible
+endpoint so passive caching
 works, and intercepts the finalized assistant message to strip the
 duplicated thinking. It mirrors the upstream fix in
 [`pi-mono@b85b91c9`](https://github.com/badlogic/pi-mono/commit/b85b91c9)
@@ -37,10 +38,10 @@ pi install ./pi-minimax-m3-caching-fix
 The extension reuses the env vars you already have for the built-in `minimax`
 provider — no new credentials required:
 
-| Provider   | Env var                | Endpoint                         |
-| ---------- | ---------------------- | -------------------------------- |
-| minimax-m3 | `MINIMAX_API_KEY`      | `https://api.minimax.io/v1`      |
-| minimax-cn-m3 | `MINIMAX_CN_API_KEY` | `https://api.minimaxi.com/v1`    |
+| Provider                  | Env var                | Endpoint                         |
+| ------------------------- | ---------------------- | -------------------------------- |
+| minimax-m3-cache-fixed    | `MINIMAX_API_KEY`      | `https://api.minimax.io/v1`      |
+| minimax-cn-m3-cache-fixed | `MINIMAX_CN_API_KEY`   | `https://api.minimaxi.com/v1`    |
 
 ## Quickstart (for the impatient)
 
@@ -56,7 +57,7 @@ pi
 
 # 4. Inside pi, switch the model
 /model
-#   pick:  minimax-m3 / MiniMax-M3 (cache-fixed)
+#   pick:  minimax-m3-cache-fixed / MiniMax-M3 (cache-fixed)
 
 # 5. Verify caching — look at the footer or session log
 #    Turn 1: ~99% cache miss (system prompt being written to cache)
@@ -71,9 +72,10 @@ happens automatically.
 
 1. Run `pi`.
 2. Open the model picker with `/model`.
-3. Pick **`minimax-m3 / MiniMax-M3 (cache-fixed)`** for the global endpoint
-   or **`minimax-cn-m3 / MiniMax-M3 (cache-fixed — CN)`** for the China
-   endpoint.
+3. Pick **`minimax-m3-cache-fixed / MiniMax-M3 (cache-fixed)`** for the
+   global endpoint or
+   **`minimax-cn-m3-cache-fixed / MiniMax-M3 (cache-fixed — CN)`** for the
+   China endpoint.
 4. Send a prompt. The first turn is a cache miss; subsequent turns of the same
    session show a `CH` (cache hit rate) in the footer as the system prompt
    gets reused.
@@ -96,10 +98,11 @@ for that provider. There are two ways that breaks the built-in integration:
   OpenAI-compatible endpoint too, breaking M2.x.
 - Override `minimax` with new `models` — this wipes M2.x from the registry.
 
-So this extension registers new provider names (`minimax-m3`,
-`minimax-cn-m3`) that don't collide with `minimax` or `minimax-cn`. Users opt
-in by switching the model in `/model`. The built-in `minimax / MiniMax-M3`
-model is still listed — **pick the one with "(cache-fixed)" in the name**.
+So this extension registers new provider names (`minimax-m3-cache-fixed`,
+`minimax-cn-m3-cache-fixed`) that don't collide with `minimax` or
+`minimax-cn`. Users opt in by switching the model in `/model`. The built-in
+`minimax / MiniMax-M3` model is still listed — **pick the one with
+"(cache-fixed)" in the name**.
 
 ## Limitations
 
@@ -113,8 +116,8 @@ model is still listed — **pick the one with "(cache-fixed)" in the name**.
   Pick the one with `(cache-fixed)` in the name.
 - **Requires both env vars for both providers to show.** pi only lists
   providers that have auth configured. If you only have `MINIMAX_API_KEY`,
-  only `minimax-m3` shows up; set `MINIMAX_CN_API_KEY` (even to a dummy
-  value) to also see `minimax-cn-m3`.
+  only `minimax-m3-cache-fixed` shows up; set `MINIMAX_CN_API_KEY` (even
+  to a dummy value) to also see `minimax-cn-m3-cache-fixed`.
 
 ## How the fix works
 

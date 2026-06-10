@@ -2,7 +2,7 @@
 
 ## What this is
 
-Standalone pi extension that fixes MiniMax-M3 (built-in `minimax` provider in pi) by routing to `/v1/chat/completions` (passive cache) and stripping duplicated thinking via a `message_end` hook. See `README.md`, `PLAN.md`, `PLAN-DELTA.md`.
+Standalone pi extension that fixes MiniMax-M3 (built-in `minimax` provider in pi) by routing to `/v1/chat/completions` (passive cache) and stripping duplicated thinking via a `message_end` hook. Model display name suffix is `(cache-fixed)`. See `README.md`, `PLAN.md`, `PLAN-DELTA.md`.
 
 ## Typecheck
 
@@ -67,7 +67,7 @@ PLAN-DELTA.md documents the choice and the trade-off (brief visual flash during 
 
 ### 2. `pi.registerProvider(name, { models })` REPLACES all models for that provider
 
-Overriding the built-in `minimax` provider would wipe M2.x. Use distinct names (`minimax-m3`, `minimax-cn-m3`) and document in README that two `MiniMax-M3` entries appear in `/model` — pick the one with `(passive cache)` in the name.
+Overriding the built-in `minimax` provider would wipe M2.x. Use distinct names (`minimax-m3`, `minimax-cn-m3`) and document in README that two `MiniMax-M3` entries appear in `/model` — pick the one with `(cache-fixed)` in the name.
 
 ### 3. Provider registration requires the env var to be set for the provider to appear
 

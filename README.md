@@ -56,7 +56,7 @@ pi
 
 # 4. Inside pi, switch the model
 /model
-#   pick:  minimax-m3 / MiniMax-M3 (passive cache)
+#   pick:  minimax-m3 / MiniMax-M3 (cache-fixed)
 
 # 5. Verify caching — look at the footer or session log
 #    Turn 1: ~99% cache miss (system prompt being written to cache)
@@ -71,8 +71,8 @@ happens automatically.
 
 1. Run `pi`.
 2. Open the model picker with `/model`.
-3. Pick **`minimax-m3 / MiniMax-M3 (passive cache)`** for the global endpoint
-   or **`minimax-cn-m3 / MiniMax-M3 (passive cache — CN)`** for the China
+3. Pick **`minimax-m3 / MiniMax-M3 (cache-fixed)`** for the global endpoint
+   or **`minimax-cn-m3 / MiniMax-M3 (cache-fixed — CN)`** for the China
    endpoint.
 4. Send a prompt. The first turn is a cache miss; subsequent turns of the same
    session show a `CH` (cache hit rate) in the footer as the system prompt
@@ -99,7 +99,7 @@ for that provider. There are two ways that breaks the built-in integration:
 So this extension registers new provider names (`minimax-m3`,
 `minimax-cn-m3`) that don't collide with `minimax` or `minimax-cn`. Users opt
 in by switching the model in `/model`. The built-in `minimax / MiniMax-M3`
-model is still listed — **pick the one with "(passive cache)" in the name**.
+model is still listed — **pick the one with "(cache-fixed)" in the name**.
 
 ## Limitations
 
@@ -109,8 +109,8 @@ model is still listed — **pick the one with "(passive cache)" in the name**.
   streaming, the TUI may briefly show the `<think>…</think>` text before the
   hook replaces the final message.
 - **Two `MiniMax-M3` entries in `/model`.** The built-in (broken, billing at
-  full input price) and the extension's (fixed, passive cache) both appear.
-  Pick the one with `(passive cache)` in the name.
+  full input price) and the extension's (cache-fixed) both appear.
+  Pick the one with `(cache-fixed)` in the name.
 - **Requires both env vars for both providers to show.** pi only lists
   providers that have auth configured. If you only have `MINIMAX_API_KEY`,
   only `minimax-m3` shows up; set `MINIMAX_CN_API_KEY` (even to a dummy

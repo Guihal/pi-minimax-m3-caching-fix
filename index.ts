@@ -92,7 +92,7 @@ interface ProviderModel {
 function makeM3Model(suffix: string): ProviderModel {
 	return {
 		id: "MiniMax-M3",
-		name: `MiniMax-M3 (passive cache${suffix})`,
+		name: `MiniMax-M3 (cache-fixed${suffix})`,
 		api: "openai-completions",
 		reasoning: true,
 		input: ["text", "image"],

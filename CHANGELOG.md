@@ -27,4 +27,4 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   briefly visible during streaming before the hook replaces the final
   message. The saved session log is clean.
 - Two `MiniMax-M3` entries appear in `/model` (built-in broken + extension
-  fixed). Users must pick the one with `(passive cache)` in the name.
+  fixed). Users must pick the one with `(cache-fixed)` in the name.

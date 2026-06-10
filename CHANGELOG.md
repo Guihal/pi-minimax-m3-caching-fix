@@ -1,9 +1,34 @@
 # Changelog
 
-All notable changes to `pi-minimax-m3` are documented here.
+All notable changes to `pi-minimax-m3-caching-fix` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
+
+### Added
+
+- `package.json` `files` whitelist and `.npmignore` so `npm publish` ships
+  only `index.ts`, `README.md`, `LICENSE`, `CHANGELOG.md`.
+- `prepublishOnly` quality gate that runs `npm run check` (tsc) before
+  every publish.
+- `repository`, `homepage`, `bugs`, and explicit `author` fields.
+- README documents the `pi install npm:pi-minimax-m3-caching-fix` flow
+  alongside the existing git install.
+- `peerDependencies` on `@earendil-works/pi-coding-agent@0.79.1` and
+  `@earendil-works/pi-ai@0.79.1` to document the runtime contract.
+- `devDependencies` on the same two packages so `npm run check` (and
+  `prepublishOnly`) can resolve types without ad-hoc symlinks.
+- `packageManager: pnpm@10.33.0` and a committed `pnpm-lock.yaml`.
+  npm's installer hits malformed symlink entries in the
+  `pi-coding-agent` tarball and leaves the project unable to resolve
+  the type imports; pnpm installs cleanly. Publish target stays npm
+  (that's what `pi install` resolves by default).
+
+### Removed
+
+- `PLAN.md`, `PLAN-DELTA.md`, and `TODO.md` from the repo. The reasoning
+  they captured is summarized inline in `index.ts` and `AGENTS.md`.
+- `AGENTS.md` and `index.ts` references to the deleted plan files.
 
 ## [0.1.0] - 2026-06-10
 

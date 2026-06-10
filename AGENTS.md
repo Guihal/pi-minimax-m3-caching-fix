@@ -2,19 +2,43 @@
 
 ## What this is
 
-Standalone pi extension that fixes MiniMax-M3 (built-in `minimax` provider in pi) by routing to `/v1/chat/completions` (passive cache) and stripping duplicated thinking via a `message_end` hook. Model display name suffix is `(cache-fixed)`. See `README.md`, `PLAN.md`, `PLAN-DELTA.md`.
+Standalone pi extension that fixes MiniMax-M3 (built-in `minimax` provider in pi) by routing to `/v1/chat/completions` (passive cache) and stripping duplicated thinking via a `message_end` hook. Model display name suffix is `(cache-fixed)`. See `README.md`.
 
 ## Typecheck
 
 ```bash
-mkdir -p node_modules/@earendil-works
-ln -sf /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent node_modules/@earendil-works/pi-coding-agent
-ln -sf /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai node_modules/@earendil-works/pi-ai
-npm run check
-rm -rf node_modules
+pnpm install --ignore-scripts
+pnpm run check
 ```
 
-The symlinks resolve `@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai` from the user's global pi install. `tsconfig.json` enables `--skipLibCheck` and `--moduleResolution bundler` so transitive type packages don't fail the check.
+Use pnpm — not npm — for the local install. npm fails to fully extract
+`@earendil-works/pi-coding-agent`'s tarball (the
+`@mistralai/mistralai/src` and `.../esm` symlink tar entries trip npm's
+extractor, and npm's flat hoisting leaves the package importable but
+untyped from the project's `node_modules/`). pnpm's content-addressable
+store and symlink-based layout install cleanly and `tsc` resolves the
+types. `pnpm-lock.yaml` is committed; `package.json` pins pnpm via
+`"packageManager": "pnpm@10.33.0"` so `corepack` picks the right
+version.
+
+`@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai` are
+declared in `devDependencies` (pinned to `0.79.1`). `tsconfig.json`
+enables `--skipLibCheck` and `--moduleResolution bundler` so transitive
+type packages don't fail the check.
+
+## Publish
+
+```bash
+pnpm install --ignore-scripts
+npm publish --access public
+```
+
+Publish to the **npm** registry (`pi install npm:pi-minimax-m3-caching-fix`),
+not pnpm's. The local install is pnpm for reproducible typecheck; the
+distribution is npm because that's what `pi install` resolves by
+default. `prepublishOnly` runs `npm run check` only — the maintainer's
+local `node_modules/` is already populated by `pnpm install`, and `tsc`
+is what we actually want to gate on.
 
 ## Install locally for testing
 
@@ -63,7 +87,7 @@ The upstream fix `pi-mono@b85b91c9` adds it; the published npm version 0.79.1 pr
 - (chosen) strip thinking via a `message_end` hook at end-of-stream, or
 - cast `compat` to bypass tsc and accept that the field is ignored at runtime
 
-PLAN-DELTA.md documents the choice and the trade-off (brief visual flash during streaming; session log stays clean).
+The original reasoning for the `message_end` approach (brief visual flash during streaming; session log stays clean) is summarized inline in `index.ts`'s file header.
 
 ### 2. `pi.registerProvider(name, { models })` REPLACES all models for that provider
 
@@ -83,9 +107,11 @@ Upstream's `skipThinkingBlock` strips markers on `message_update` (cleaner live 
 
 The leading-`$` form does env-var interpolation at request time (per the `migrateLegacyRegisterProviderConfigValue` migration path: leading `$` is the modern syntax; bare env-var names trigger a deprecation warning). Use `$MINIMAX_API_KEY`, not `"MINIMAX_API_KEY"`.
 
-### 6. pi uses the global node_modules, not project-local
+### 6. Runtime resolves host packages from the user's global pi; devDependencies exist only for typecheck
 
-`@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai` resolve from the user's installed pi (e.g., `/opt/homebrew/lib/node_modules/@earendil-works/...` on macOS Homebrew). The extension's `package.json` does NOT list them as dependencies — declaring them would force re-resolution. For typecheck only, symlink the global packages into a temporary `node_modules/` (see typecheck section above).
+At runtime, `@earendil-works/pi-coding-agent` and `@earendil-works/pi-ai` resolve from the user's installed pi (e.g., `/opt/homebrew/lib/node_modules/@earendil-works/...` on macOS Homebrew). The extension declares them in `peerDependencies` (pinned to `0.79.1`) to document the contract and surface a version mismatch warning, and in `devDependencies` (same pin) so `tsc` can resolve types during publish. They are not `dependencies` — `pi install` does not duplicate them under the user's extension directory.
+
+Local typecheck installs use pnpm (see Typecheck section). The `pi-coding-agent` tarball has malformed symlink entries (`@mistralai/mistralai/src`, `.../esm`) that npm's extractor warns about and that, combined with npm's flat-hoisting resolution, leave `import type` from the project unresolvable. pnpm installs cleanly.
 
 ### 7. Conventional-commits hook lives globally
 

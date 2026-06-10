@@ -1,18 +1,35 @@
 {
-	"name": "pi-minimax-m3",
+	"name": "pi-minimax-m3-caching-fix",
 	"version": "0.1.0",
-	"private": true,
 	"description": "MiniMax-M3 on the OpenAI-compatible endpoint with passive caching, plus a thinking-strip hook for current pi-ai versions that predate the upstream skipThinkingBlock compat flag.",
 	"type": "module",
 	"keywords": ["pi-package", "minimax", "minimax-m3", "caching"],
 	"license": "MIT",
+	"files": ["index.ts", "README.md", "LICENSE", "CHANGELOG.md"],
 	"scripts": {
-		"check": "tsc -p tsconfig.json"
+		"check": "tsc -p tsconfig.json",
+		"prepublishOnly": "npm run check"
 	},
 	"pi": {
 		"extensions": ["./index.ts"]
 	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "0.79.1",
+		"@earendil-works/pi-ai": "0.79.1"
+	},
 	"devDependencies": {
+		"@earendil-works/pi-ai": "0.79.1",
+		"@earendil-works/pi-coding-agent": "0.79.1",
 		"typescript": "5.6.3"
+	},
+	"author": "René Weselowski <rwese@users.noreply.github.com>",
+	"packageManager": "pnpm@10.33.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/rwese/pi-minimax-m3-caching-fix.git"
+	},
+	"homepage": "https://github.com/rwese/pi-minimax-m3-caching-fix#readme",
+	"bugs": {
+		"url": "https://github.com/rwese/pi-minimax-m3-caching-fix/issues"
 	}
 }

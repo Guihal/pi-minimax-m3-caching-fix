@@ -163,7 +163,7 @@ export default function (pi: ExtensionAPI) {
 		models: [makeM3Model(" — CN")],
 	});
 
-	// --- Thinking-strip hook (PLAN-DELTA) ----------------------------------
+	// --- Thinking-strip hook -----------------------------------------------
 
 	pi.on("message_end", (event) => {
 		const { message } = event;

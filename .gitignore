@@ -1,3 +1,8 @@
 node_modules/
 *.log
 .DS_Store
+
+# Agent / scratch dirs
+.agents/
+.codex/
+.pi/

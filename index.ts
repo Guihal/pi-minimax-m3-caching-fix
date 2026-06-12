@@ -1,211 +1,433 @@
 /**
- * pi-minimax-m3 — register MiniMax-M3 on the OpenAI-compatible endpoint
+ * minimax-m3-clean — MiniMax-M3 on the OpenAI-compatible endpoint with
+ * clean streaming output.
  *
- * Background
- * ----------
- * The built-in `minimax` provider in pi routes MiniMax-M3 to the Anthropic
- * Messages-compatible endpoint (`/anthropic/v1/messages`). M3 silently ignores
- * `cache_control` markers on that endpoint, so every turn is billed at full
- * input price ($0.60/Mtok) instead of cache-read price ($0.12/Mtok).
+ * Why this exists
+ * ---------------
+ * pi 0.79.1 routes the built-in `minimax / MiniMax-M3` to the Anthropic-
+ * compatible endpoint, which silently ignores `cache_control` (full input
+ * price every turn). The OpenAI-compatible endpoint (`/v1/chat/completions`)
+ * does passive caching — but there M3 has two streaming quirks:
  *
- * M3 does support passive/automatic caching on its OpenAI-compatible endpoint
- * (`/v1/chat/completions`). Routing M3 to that endpoint — and removing the
- * thinking-duplication bug — is the upstream fix in `pi-mono@b85b91c9`.
+ *   1. It emits thinking twice: in `reasoning_content`/`reasoning` fields
+ *      (consumed by pi as thinking blocks) and again inline in `content` as
+ *      `<think>…</think>`, which pollutes the visible text.
+ *   2. It alternates between `reasoning_content` and `reasoning` across
+ *      chunks. pi-ai's openai-completions driver starts a NEW thinking block
+ *      whenever the field (signature) changes, producing a truncated orphan
+ *      thinking block followed by a second block that re-streams the
+ *      reasoning from the start.
  *
- * This extension reproduces the routing fix for any pi version: it registers
- * two new providers (`minimax-m3-cache-fixed`, `minimax-cn-m3-cache-fixed`)
- * that point at the OpenAI-compatible M3 base URLs.
+ * The upstream fix (earendil-works/pi commit b85b91c9, `skipThinkingBlock`)
+ * is not merged/released as of 0.79.1, and the community extension
+ * `rwese/pi-minimax-m3-caching-fix` only strips the `<think>` duplicate at
+ * `message_end`, after it was visible during the whole stream.
  *
- * Why a separate provider (not overriding the built-in)
- * -----------------------------------------------------
- * `pi.registerProvider(name, { models })` REPLACES every model for that
- * provider. Overriding `minimax` would wipe M2.x. Overriding only the URL
- * would lump M2.x onto the OpenAI-compat endpoint. So we register new
- * provider names instead.
+ * This extension fixes both at the stream level: it registers providers
+ * whose `streamSimple` delegates to the built-in openai-completions driver
+ * and rewrites the event stream in flight:
  *
- * Thinking duplication
- * --------------------
- * M3 emits thinking twice: once in `reasoning_content` (consumed by pi as a
- * thinking block) and once in `content` wrapped in <think>…</think> markers
- * (which lands in the visible text block).
+ *   - All driver thinking blocks are merged into ONE thinking block.
+ *     Re-streamed duplicate content (prefix overlap) is suppressed; only
+ *     genuinely new reasoning is emitted.
+ *   - `<think>…</think>` spans are filtered out of text deltas in real time
+ *     (handles markers split across deltas). If the model never streamed
+ *     reasoning fields, the `<think>` content is re-routed into a real
+ *     thinking block instead of being dropped.
+ *   - Visible text starts only at its first non-whitespace character, so no
+ *     empty/whitespace text blocks are rendered.
+ *   - Tool calls, usage, and stop reasons pass through untouched.
  *
- * The upstream fix adds a `compat.skipThinkingBlock` flag to
- * `OpenAICompletionsCompat` in pi-ai. The latest published pi-ai (0.79.1) does
- * not yet have this flag — it lands in the next release. To fix the
- * duplication today, this extension intercepts the finalized assistant message
- * via the `message_end` event and:
- *   1. drops any `thinking` content blocks
- *   2. strips <think>…</think> (and any inner content) from `text` blocks
- *
- * Trade-off: the duplication is visible during streaming and only cleaned up
- * at the end of the turn. The TUI replaces the message in place at
- * `message_end`, so the saved session log is clean.
- *
- * Removal
- * -------
- * When pi-mono ships a pi-ai release that includes `skipThinkingBlock` (and
- * routes M3 to openai-completions in `models.generated.ts`), uninstall this
- * extension and switch back to the built-in `minimax / MiniMax-M3`.
+ * Removal: when a pi release ships MiniMax-M3 on `openai-completions` with
+ * `skipThinkingBlock` (upstream b85b91c9), delete this file and switch back
+ * to the built-in `minimax / MiniMax-M3` via /model.
  */
 
-import type { ExtensionAPI, ProviderConfig, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage, TextContent, ThinkingContent } from "@earendil-works/pi-ai";
+import type {
+	Api,
+	AssistantMessage,
+	AssistantMessageEventStream,
+	Context,
+	Model,
+	SimpleStreamOptions,
+	TextContent,
+	ThinkingContent,
+} from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, getApiProvider } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-/** Provider names this extension owns. */
-const OWN_PROVIDERS = new Set(["minimax-m3-cache-fixed", "minimax-cn-m3-cache-fixed"]);
+const OPEN_TAG = "<think>";
+const CLOSE_TAG = "</think>";
 
 /**
- * MiniMax-M3 model metadata.
- *
- * `contextWindow: 1_000_000` and `maxTokens: 512_000` match the published M3
- * spec (the upstream `models.generated.ts` for the built-in provider lists
- * 512K/128K, which is a more conservative cap that the OpenAI-compat endpoint
- * does not enforce). The user's existing `~/.pi/agent/models.json` uses the
- * 1M/512K pair against `https://api.minimax.io/v1`, so we match that.
- *
- * The compat block matches the upstream M3 fix; `skipThinkingBlock` is
- * intentionally NOT set because the user's installed pi-ai predates that
- * field. The thinking-strip happens in the `message_end` hook below.
+ * Incremental scanner that splits a text stream into visible text and
+ * `<think>…</think>` inner content. Tags split across deltas are held back
+ * until they can be classified.
  */
-const M3_COST = { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 };
-const M3_LIMITS = { contextWindow: 1_000_000, maxTokens: 512_000 };
+class ThinkScanner {
+	private buf = "";
+	private inThink = false;
+
+	feed(chunk: string): { text: string; think: string } {
+		let text = "";
+		let think = "";
+		const s = this.buf + chunk;
+		this.buf = "";
+		let i = 0;
+		while (i < s.length) {
+			const tag = this.inThink ? CLOSE_TAG : OPEN_TAG;
+			const idx = s.indexOf(tag, i);
+			if (idx !== -1) {
+				const piece = s.slice(i, idx);
+				if (this.inThink) think += piece;
+				else text += piece;
+				this.inThink = !this.inThink;
+				i = idx + tag.length;
+			} else {
+				const keep = partialTagSuffix(s, i, tag);
+				const piece = s.slice(i, s.length - keep);
+				if (this.inThink) think += piece;
+				else text += piece;
+				this.buf = s.slice(s.length - keep);
+				i = s.length;
+			}
+		}
+		return { text, think };
+	}
+
+	/** Flush held-back bytes at end of block. An unterminated `<think>` stays thinking. */
+	flush(): { text: string; think: string } {
+		const rest = this.buf;
+		this.buf = "";
+		if (!rest) return { text: "", think: "" };
+		return this.inThink ? { text: "", think: rest } : { text: rest, think: "" };
+	}
+}
+
+/** Longest k < tag.length such that s (from `from`) ends with tag.slice(0, k). */
+function partialTagSuffix(s: string, from: number, tag: string): number {
+	const max = Math.min(tag.length - 1, s.length - from);
+	for (let k = max; k > 0; k--) {
+		if (s.endsWith(tag.slice(0, k))) return k;
+	}
+	return 0;
+}
+
+interface TextState {
+	scanner: ThinkScanner;
+	started: boolean;
+	index: number;
+	block: TextContent;
+}
+
+interface ThinkingSegment {
+	block: ThinkingContent;
+	index: number;
+	open: boolean;
+	/** Leading-whitespace-trimmed accumulated thinking text (what was emitted). */
+	text: string;
+	signature?: string;
+}
 
 /**
- * Compat flags for OpenAI-completions against MiniMax-M3.
- *
- * Modeled after the `OpenAICompletionsCompat` shape in pi-ai but written as
- * a local constant because `ProviderModelConfig["compat"]` is typed
- * `Model<Api>["compat"]` — a union over every API — and pi-ai@0.79.1's union
- * member for `openai-completions` (`ResolvedOpenAICompletionsCompat`) is the
- * post-resolution shape, not the author-facing input. The author-facing
- * shape accepts partial input; the keys below are exactly what the upstream
- * M3 entry uses. Extra unknown keys are rejected by the validator in
- * `ModelRegistry.validateProviderConfig`; missing keys are filled in by
- * `applyProviderConfig`'s defaults. We only need to list the ones that
- * differ from the defaults.
+ * Wrap the built-in openai-completions stream, rewriting events so that
+ * `<think>` content never reaches a visible text block and duplicated /
+ * re-streamed reasoning collapses into a single thinking block.
  */
+function cleanStream(base: AssistantMessageEventStream): AssistantMessageEventStream {
+	const out = createAssistantMessageEventStream();
+
+	void (async () => {
+		let output: AssistantMessage | undefined;
+		const toolIndexMap = new Map<number, number>();
+		const textStates = new Map<number, TextState>();
+		/** Accumulated text per base thinking block, for prefix dedupe. */
+		const baseThinkingAccs = new Map<number, string>();
+		let sawBaseThinking = false;
+		let segment: ThinkingSegment | undefined;
+
+		const ensureOutput = (partial: AssistantMessage): AssistantMessage => {
+			if (!output) output = { ...partial, content: [] };
+			return output;
+		};
+
+		// The base driver mutates its partial in place; mirror everything but
+		// content (usage, stopReason, responseId, …) onto our partial.
+		const syncMeta = (partial: AssistantMessage) => {
+			if (!output) {
+				ensureOutput(partial);
+				return;
+			}
+			for (const key of Object.keys(partial)) {
+				if (key === "content") continue;
+				(output as unknown as Record<string, unknown>)[key] = (
+					partial as unknown as Record<string, unknown>
+				)[key];
+			}
+		};
+
+		const ensureSegment = (): ThinkingSegment => {
+			if (segment?.open) return segment;
+			const block: ThinkingContent = { type: "thinking", thinking: "" };
+			output!.content.push(block);
+			segment = { block, index: output!.content.length - 1, open: true, text: "" };
+			baseThinkingAccs.clear();
+			out.push({ type: "thinking_start", contentIndex: segment.index, partial: output! });
+			return segment;
+		};
+
+		const closeSegment = () => {
+			if (!segment?.open) return;
+			segment.open = false;
+			segment.text = segment.text.trimEnd();
+			segment.block.thinking = segment.text;
+			if (segment.signature) {
+				(segment.block as ThinkingContent & { thinkingSignature?: string }).thinkingSignature =
+					segment.signature;
+			}
+			out.push({
+				type: "thinking_end",
+				contentIndex: segment.index,
+				content: segment.text,
+				partial: output!,
+			});
+		};
+
+		/** Append already-deduped thinking text to the current segment. */
+		const appendThinking = (delta: string) => {
+			if (!delta || !output) return;
+			const seg = ensureSegment();
+			if (seg.text === "") {
+				delta = delta.replace(/^\s+/, "");
+				if (!delta) return;
+			}
+			seg.text += delta;
+			seg.block.thinking = seg.text;
+			out.push({ type: "thinking_delta", contentIndex: seg.index, delta, partial: output });
+		};
+
+		/**
+		 * Thinking from a base thinking block. M3 re-streams the same
+		 * reasoning when the driver switches reasoning fields, so emit only
+		 * the part that extends what the current segment already holds.
+		 */
+		const pushBaseThinking = (contentIndex: number, delta: string) => {
+			const acc = (baseThinkingAccs.get(contentIndex) ?? "") + delta;
+			baseThinkingAccs.set(contentIndex, acc);
+			const seg = segment?.open ? segment : undefined;
+			const have = seg?.text ?? "";
+			const norm = acc.replace(/^\s+/, "");
+			if (norm.length <= have.length) {
+				// Duplicate prefix of what we already emitted → suppress.
+				if (have.startsWith(norm)) return;
+				appendThinking(delta);
+			} else if (norm.startsWith(have)) {
+				appendThinking(norm.slice(have.length));
+			} else {
+				appendThinking(delta);
+			}
+		};
+
+		/** Thinking recovered from inline `<think>…</think>` markers. */
+		const pushInlineThinking = (think: string) => {
+			// If the model streams real reasoning fields, the <think> copy is a
+			// duplicate — drop it.
+			if (!think || sawBaseThinking || !output) return;
+			appendThinking(think);
+		};
+
+		const pushText = (state: TextState, text: string) => {
+			if (!text || !output) return;
+			if (!state.started) {
+				text = text.replace(/^\s+/, "");
+				if (!text) return;
+				closeSegment();
+				output.content.push(state.block);
+				state.index = output.content.length - 1;
+				state.started = true;
+				out.push({ type: "text_start", contentIndex: state.index, partial: output });
+			}
+			state.block.text += text;
+			out.push({ type: "text_delta", contentIndex: state.index, delta: text, partial: output });
+		};
+
+		try {
+			for await (const ev of base) {
+				switch (ev.type) {
+					case "start": {
+						ensureOutput(ev.partial);
+						out.push({ type: "start", partial: output! });
+						break;
+					}
+					case "thinking_start": {
+						sawBaseThinking = true;
+						syncMeta(ev.partial);
+						baseThinkingAccs.set(ev.contentIndex, "");
+						break;
+					}
+					case "thinking_delta": {
+						syncMeta(ev.partial);
+						pushBaseThinking(ev.contentIndex, ev.delta);
+						break;
+					}
+					case "thinking_end": {
+						syncMeta(ev.partial);
+						// Don't close the merged segment: the driver may open a
+						// follow-up block that continues the same reasoning. Just
+						// remember the signature for the final block.
+						const baseBlock = ev.partial.content[ev.contentIndex] as
+							| (ThinkingContent & { thinkingSignature?: string })
+							| undefined;
+						if (segment && baseBlock?.type === "thinking" && baseBlock.thinkingSignature) {
+							segment.signature = baseBlock.thinkingSignature;
+						}
+						break;
+					}
+					case "text_start": {
+						syncMeta(ev.partial);
+						// Don't emit yet: the block may turn out to be pure <think>
+						// content. text_start fires on the first visible character.
+						textStates.set(ev.contentIndex, {
+							scanner: new ThinkScanner(),
+							started: false,
+							index: -1,
+							block: { type: "text", text: "" },
+						});
+						break;
+					}
+					case "text_delta": {
+						syncMeta(ev.partial);
+						const state = textStates.get(ev.contentIndex);
+						if (!state) break;
+						const { text, think } = state.scanner.feed(ev.delta);
+						pushInlineThinking(think);
+						pushText(state, text);
+						break;
+					}
+					case "text_end": {
+						syncMeta(ev.partial);
+						const state = textStates.get(ev.contentIndex);
+						if (!state) break;
+						const tail = state.scanner.flush();
+						pushInlineThinking(tail.think);
+						pushText(state, tail.text);
+						if (state.started) {
+							state.block.text = state.block.text.trimEnd();
+							out.push({
+								type: "text_end",
+								contentIndex: state.index,
+								content: state.block.text,
+								partial: output!,
+							});
+						}
+						break;
+					}
+					case "toolcall_start": {
+						syncMeta(ev.partial);
+						closeSegment();
+						const baseBlock = ev.partial.content[ev.contentIndex];
+						output!.content.push(baseBlock as AssistantMessage["content"][number]);
+						toolIndexMap.set(ev.contentIndex, output!.content.length - 1);
+						out.push({
+							type: "toolcall_start",
+							contentIndex: toolIndexMap.get(ev.contentIndex)!,
+							partial: output!,
+						});
+						break;
+					}
+					case "toolcall_delta": {
+						syncMeta(ev.partial);
+						const idx = toolIndexMap.get(ev.contentIndex);
+						if (idx === undefined) break;
+						out.push({ type: "toolcall_delta", contentIndex: idx, delta: ev.delta, partial: output! });
+						break;
+					}
+					case "toolcall_end": {
+						syncMeta(ev.partial);
+						const idx = toolIndexMap.get(ev.contentIndex);
+						if (idx === undefined) break;
+						output!.content[idx] = ev.toolCall;
+						out.push({ type: "toolcall_end", contentIndex: idx, toolCall: ev.toolCall, partial: output! });
+						break;
+					}
+					case "done": {
+						closeSegment();
+						const message: AssistantMessage = {
+							...ev.message,
+							content: output ? output.content : ev.message.content,
+						};
+						out.push({ type: "done", reason: ev.reason, message });
+						break;
+					}
+					case "error": {
+						closeSegment();
+						const error: AssistantMessage = {
+							...ev.error,
+							content: output ? output.content : ev.error.content,
+						};
+						out.push({ type: "error", reason: ev.reason, error });
+						break;
+					}
+				}
+			}
+		} catch (e) {
+			const errorMessage = e instanceof Error ? e.message : String(e);
+			const fallback: AssistantMessage = output ?? {
+				role: "assistant",
+				content: [],
+				api: "openai-completions",
+				provider: "minimax-m3-clean",
+				model: "MiniMax-M3",
+				usage: {} as AssistantMessage["usage"],
+				stopReason: "error",
+				timestamp: Date.now(),
+			};
+			out.push({
+				type: "error",
+				reason: "error",
+				error: { ...fallback, stopReason: "error", errorMessage },
+			});
+		}
+	})();
+
+	return out;
+}
+
 const M3_COMPAT = {
 	supportsStore: false,
 	supportsDeveloperRole: false,
 	supportsReasoningEffort: false,
 	maxTokensField: "max_tokens" as const,
-	supportsStrictMode: false,
-	supportsLongCacheRetention: false,
 };
 
-function makeM3Model(suffix: string): ProviderModelConfig {
-	return {
-		id: "MiniMax-M3",
-		name: `MiniMax-M3 (cache-fixed${suffix})`,
-		api: "openai-completions",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: M3_COST,
-		contextWindow: M3_LIMITS.contextWindow,
-		maxTokens: M3_LIMITS.maxTokens,
-		compat: M3_COMPAT,
-	};
-}
-
-function makeProviderConfig(
-	baseUrl: string,
-	apiKey: string,
-	suffix: string,
-): ProviderConfig {
-	return {
+function makeProvider(pi: ExtensionAPI, name: string, baseUrl: string, apiKey: string, label: string) {
+	const api = name as Api; // custom api id so only these models hit our handler
+	pi.registerProvider(name, {
 		baseUrl,
 		apiKey,
-		api: "openai-completions",
-		models: [makeM3Model(suffix)],
-	};
-}
-
-/**
- * Strip <think>…</think> blocks (including any inner content) from a string.
- *
- * Mirrors the upstream `openai-completions.ts` regex:
- *   `text.replace(/<think>[\s\S]*?<\/think>/g, "")`
- * plus a final pass that also catches unclosed `<think>` markers (defensive
- * against split-across-deltas edge cases).
- */
-function stripThinkMarkers(text: string): string {
-	return text.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/<think>[\s\S]*$/g, "").trim();
-}
-
-function isAssistantMessage(message: unknown): message is AssistantMessage {
-	return (
-		typeof message === "object" &&
-		message !== null &&
-		(message as { role?: string }).role === "assistant"
-	);
-}
-
-function isTextBlock(block: unknown): block is TextContent {
-	return (
-		typeof block === "object" &&
-		block !== null &&
-		(block as { type?: string }).type === "text"
-	);
-}
-
-function isThinkingBlock(block: unknown): block is ThinkingContent {
-	return (
-		typeof block === "object" &&
-		block !== null &&
-		(block as { type?: string }).type === "thinking"
-	);
+		api,
+		streamSimple: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => {
+			const driver = getApiProvider("openai-completions");
+			if (!driver) throw new Error("openai-completions api provider not registered");
+			const base = driver.streamSimple({ ...model, api: "openai-completions" }, context, options);
+			return cleanStream(base);
+		},
+		models: [
+			{
+				id: "MiniMax-M3",
+				name: label,
+				reasoning: true,
+				input: ["text", "image"],
+				cost: { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 },
+				contextWindow: 1_000_000,
+				maxTokens: 512_000,
+				compat: M3_COMPAT,
+			},
+		],
+	});
 }
 
 export default function (pi: ExtensionAPI) {
-	// --- Provider registration (T2: passive-cache routing) -----------------
-
-	pi.registerProvider(
-		"minimax-m3-cache-fixed",
-		makeProviderConfig("https://api.minimax.io/v1", "$MINIMAX_API_KEY", ""),
-	);
-
-	pi.registerProvider(
-		"minimax-cn-m3-cache-fixed",
-		makeProviderConfig("https://api.minimaxi.com/v1", "$MINIMAX_CN_API_KEY", " — CN"),
-	);
-
-	// --- Thinking-strip hook -----------------------------------------------
-
-	pi.on("message_end", (event) => {
-		const { message } = event;
-		if (!isAssistantMessage(message)) return;
-		if (!OWN_PROVIDERS.has(message.provider)) return;
-
-		// Replace thinking blocks with empty text blocks (keeps the content
-		// array shape) and strip <think>…</think> markers from text blocks.
-		// Returns undefined when nothing changed so the agent session log
-		// stays untouched.
-		const original = message.content;
-		const cleaned: AssistantMessage["content"] = [];
-		let mutated = false;
-
-		for (const block of original) {
-			if (isThinkingBlock(block)) {
-				// Drop the thinking block entirely. The thinking was already
-				// shown to the user via the live TUI; we don't need a stub.
-				mutated = true;
-				continue;
-			}
-			if (isTextBlock(block)) {
-				const cleanedText = stripThinkMarkers(block.text);
-				if (cleanedText !== block.text) {
-					mutated = true;
-					cleaned.push({ ...block, text: cleanedText });
-				} else {
-					cleaned.push(block);
-				}
-				continue;
-			}
-			cleaned.push(block);
-		}
-
-		if (!mutated) return undefined;
-
-		return { message: { ...message, content: cleaned } };
-	});
+	makeProvider(pi, "minimax-m3-clean", "https://api.minimax.io/v1", "$MINIMAX_API_KEY", "MiniMax-M3 (clean)");
+	makeProvider(pi, "minimax-cn-m3-clean", "https://api.minimaxi.com/v1", "$MINIMAX_CN_API_KEY", "MiniMax-M3 (clean — CN)");
 }

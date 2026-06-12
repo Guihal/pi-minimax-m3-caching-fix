@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-12
+
+### Changed
+
+- **Reworked cleanup from post-hoc to in-flight.** The previous version
+  used a `message_end` hook to strip `<think>…</think>` markers and drop
+  thinking blocks after the full turn had already streamed through the
+  TUI. The new version wraps the built-in `openai-completions`
+  `streamSimple` driver and rewrites the event stream in real time:
+  duplicated thinking from M3's `reasoning_content` / `reasoning`
+  alternation is suppressed, `<think>…</think>` spans are filtered out
+  of text deltas (and their inner content routed to a real thinking
+  block when no reasoning fields are streamed), and `text_start` is
+  deferred until the first non-whitespace character.
+- **Renamed providers** from `minimax-m3-cache-fixed` and
+  `minimax-cn-m3-cache-fixed` to `minimax-m3-clean` and
+  `minimax-cn-m3-clean`. Model display suffix changed from
+  `(cache-fixed)` to `(clean)`. The wrapped provider is registered under
+  a custom `api` id (the provider name) so only these models route
+  through the wrapper.
+- `index.ts` file header rewritten to describe the in-flight strategy
+  and the two streaming quirks (duplicate reasoning, inline `<think>`)
+  that motivate it.
+
 ### Added
 
 - `package.json` `files` whitelist and `.npmignore` so `npm publish` ships
@@ -29,6 +53,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - `PLAN.md`, `PLAN-DELTA.md`, and `TODO.md` from the repo. The reasoning
   they captured is summarized inline in `index.ts` and `AGENTS.md`.
 - `AGENTS.md` and `index.ts` references to the deleted plan files.
+- The `message_end` thinking-strip hook (subsumed by the in-flight
+  stream wrapper).
 
 ## [0.1.0] - 2026-06-10
 

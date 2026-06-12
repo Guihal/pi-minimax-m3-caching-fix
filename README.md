@@ -13,11 +13,18 @@ issues with the built-in **MiniMax-M3** integration:
    in `content` wrapped in `<think>…</think>` markers (which would otherwise
    appear inside the visible text).
 
-This extension registers two new providers — `minimax-m3-cache-fixed` and
-`minimax-cn-m3-cache-fixed` — that route MiniMax-M3 to the OpenAI-compatible
-endpoint so passive caching
-works, and intercepts the finalized assistant message to strip the
-duplicated thinking. It mirrors the upstream fix in
+This extension registers two new providers — `minimax-m3-clean` and
+`minimax-cn-m3-clean` — that route MiniMax-M3 to the OpenAI-compatible
+endpoint so passive caching works. The thinking cleanup is performed
+**during the stream** by wrapping the built-in `openai-completions`
+`streamSimple` driver and rewriting the event stream in flight: duplicated
+thinking from M3's `reasoning_content` / `reasoning` field alternation is
+suppressed, `<think>…</think>` spans are filtered out of text deltas (and
+their inner content is routed to a real thinking block when no reasoning
+fields were streamed), and `text_start` is deferred until the first
+non-whitespace character.
+
+It mirrors the upstream fix in
 [`pi-mono@b85b91c9`](https://github.com/badlogic/pi-mono/commit/b85b91c9)
 ("route MiniMax-M3 to openai-completions for passive caching") so users can
 get the fix on any pi version without waiting for an upstream release.
@@ -34,7 +41,7 @@ From a git checkout (latest, or pinned):
 
 ```bash
 pi install git:github.com/rwese/pi-minimax-m3-caching-fix
-pi install git:github.com/rwese/pi-minimax-m3-caching-fix@v0.1.0
+pi install git:github.com/rwese/pi-minimax-m3-caching-fix@v0.2.0
 ```
 
 For local development from a clone:
@@ -47,10 +54,10 @@ pi install ./pi-minimax-m3-caching-fix
 The extension reuses the env vars you already have for the built-in `minimax`
 provider — no new credentials required:
 
-| Provider                  | Env var                | Endpoint                         |
-| ------------------------- | ---------------------- | -------------------------------- |
-| minimax-m3-cache-fixed    | `MINIMAX_API_KEY`      | `https://api.minimax.io/v1`      |
-| minimax-cn-m3-cache-fixed | `MINIMAX_CN_API_KEY`   | `https://api.minimaxi.com/v1`    |
+| Provider              | Env var                | Endpoint                         |
+| --------------------- | ---------------------- | -------------------------------- |
+| minimax-m3-clean      | `MINIMAX_API_KEY`      | `https://api.minimax.io/v1`      |
+| minimax-cn-m3-clean   | `MINIMAX_CN_API_KEY`   | `https://api.minimaxi.com/v1`    |
 
 ## Quickstart (for the impatient)
 
@@ -66,7 +73,7 @@ pi
 
 # 4. Inside pi, switch the model
 /model
-#   pick:  minimax-m3-cache-fixed / MiniMax-M3 (cache-fixed)
+#   pick:  minimax-m3-clean / MiniMax-M3 (clean)
 
 # 5. Verify caching — look at the footer or session log
 #    Turn 1: ~99% cache miss (system prompt being written to cache)
@@ -81,9 +88,9 @@ happens automatically.
 
 1. Run `pi`.
 2. Open the model picker with `/model`.
-3. Pick **`minimax-m3-cache-fixed / MiniMax-M3 (cache-fixed)`** for the
+3. Pick **`minimax-m3-clean / MiniMax-M3 (clean)`** for the
    global endpoint or
-   **`minimax-cn-m3-cache-fixed / MiniMax-M3 (cache-fixed — CN)`** for the
+   **`minimax-cn-m3-clean / MiniMax-M3 (clean — CN)`** for the
    China endpoint.
 4. Send a prompt. The first turn is a cache miss; subsequent turns of the same
    session show a `CH` (cache hit rate) in the footer as the system prompt
@@ -107,48 +114,56 @@ for that provider. There are two ways that breaks the built-in integration:
   OpenAI-compatible endpoint too, breaking M2.x.
 - Override `minimax` with new `models` — this wipes M2.x from the registry.
 
-So this extension registers new provider names (`minimax-m3-cache-fixed`,
-`minimax-cn-m3-cache-fixed`) that don't collide with `minimax` or
+So this extension registers new provider names (`minimax-m3-clean`,
+`minimax-cn-m3-clean`) that don't collide with `minimax` or
 `minimax-cn`. Users opt in by switching the model in `/model`. The built-in
 `minimax / MiniMax-M3` model is still listed — **pick the one with
-"(cache-fixed)" in the name**.
+"(clean)" in the name**.
 
 ## Limitations
 
-- **Brief visual flash of duplicated thinking during streaming.** The
-  `message_end` hook strips the markers and drops the duplicate thinking
-  block at the end of each turn; the saved session log is clean. During live
-  streaming, the TUI may briefly show the `<think>…</think>` text before the
-  hook replaces the final message.
 - **Two `MiniMax-M3` entries in `/model`.** The built-in (broken, billing at
-  full input price) and the extension's (cache-fixed) both appear.
-  Pick the one with `(cache-fixed)` in the name.
+  full input price) and the extension's (clean) both appear. Pick the one
+  with `(clean)` in the name.
 - **Requires both env vars for both providers to show.** pi only lists
   providers that have auth configured. If you only have `MINIMAX_API_KEY`,
-  only `minimax-m3-cache-fixed` shows up; set `MINIMAX_CN_API_KEY` (even
-  to a dummy value) to also see `minimax-cn-m3-cache-fixed`.
+  only `minimax-m3-clean` shows up; set `MINIMAX_CN_API_KEY` (even to a
+  dummy value) to also see `minimax-cn-m3-clean`.
 
 ## How the fix works
 
 The extension does two things:
 
 1. **Routes M3 to `/v1/chat/completions`** by registering the two new
-   providers. The model metadata mirrors
+   providers under a custom `api` id (the provider name) so the wrapper
+   below only intercepts these models. The model metadata mirrors
    `packages/ai/src/models.generated.ts` from the upstream fix:
    `input: ["text", "image"]`, `reasoning: true`, cost
    `$0.6 / $2.4 / $0.12` per million tokens, 1M-token context window, 512K
    max output.
-2. **Strips duplicated thinking via a `message_end` hook.** When an assistant
-   message from one of the two new providers ends, the extension:
-   - drops any `thinking` content block (already shown in the live TUI), and
-   - strips `<think>…</think>` markers (and any inner content) from any
-     `text` content block.
+2. **Cleans M3's thinking in the stream wrapper.** The wrapper sits in
+   front of the built-in `openai-completions` `streamSimple` driver and
+   rewrites events as they arrive:
+   - All driver thinking blocks are merged into ONE thinking block.
+     M3 re-streams the same reasoning when it switches between
+     `reasoning_content` and `reasoning` fields, which would otherwise
+     start a new (truncated) thinking block on every field switch. The
+     wrapper dedupes by prefix and emits only the new portion of
+     reasoning.
+   - A `ThinkScanner` filters `<think>…</think>` spans from text deltas
+     in real time and holds back bytes that look like the start of a tag
+     so markers split across deltas are classified correctly. If the model
+     never streamed reasoning fields, the captured inner content is
+     routed to a real thinking block instead of being dropped; otherwise
+     it's a duplicate of the reasoning fields and is discarded.
+   - `text_start` is deferred until the first non-whitespace character so
+     empty / whitespace-only text blocks are not rendered.
 
-   This is the same effect as the upstream `compat.skipThinkingBlock` flag,
-   but applied at end-of-stream because the user's installed
-   `@earendil-works/pi-ai` (0.79.1) predates that compat field. When a future
-   pi-ai release includes `skipThinkingBlock`, the hook can be removed and
-   the extension becomes a thin shim that just routes the model.
+   This is the same effect as the upstream `compat.skipThinkingBlock`
+   flag, but applied in the stream wrapper because the user's installed
+   `@earendil-works/pi-ai` (0.79.1) predates that compat field. When a
+   future pi-ai release includes `skipThinkingBlock`, the wrapper
+   becomes a thin pass-through and can be deleted.
 
 ## Removing the extension (when upstream ships the fix)
 
@@ -166,6 +181,12 @@ the box.
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+## Credits
+
+The in-flight thinking-cleanup wrapper introduced in v0.2.0 (the
+`ThinkScanner`, the merged-thinking block, and the deferred `text_start`)
+was contributed by Thunder Guardian (Discord: `@Thunder Guardian`).
 
 ## Development
 

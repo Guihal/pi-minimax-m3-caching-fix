@@ -1,7 +1,7 @@
 {
 	"name": "pi-minimax-m3-caching-fix",
-	"version": "0.1.0",
-	"description": "MiniMax-M3 on the OpenAI-compatible endpoint with passive caching, plus a thinking-strip hook for current pi-ai versions that predate the upstream skipThinkingBlock compat flag.",
+	"version": "0.2.0",
+	"description": "MiniMax-M3 on the OpenAI-compatible endpoint with passive caching. Wraps the built-in openai-completions streamSimple driver to clean duplicated and inline <think>…</think> thinking in flight, mirroring the upstream skipThinkingBlock compat flag for pi-ai versions that predate it.",
 	"type": "module",
 	"keywords": ["pi-package", "minimax", "minimax-m3", "caching"],
 	"license": "MIT",

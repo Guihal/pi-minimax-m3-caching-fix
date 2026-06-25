@@ -141,9 +141,9 @@ function cleanStream(base: AssistantMessageEventStream): AssistantMessageEventSt
 		let output: AssistantMessage | undefined;
 		const toolIndexMap = new Map<number, number>();
 		const textStates = new Map<number, TextState>();
-		/** Accumulated text per base thinking block, for prefix dedupe. */
-		const baseThinkingAccs = new Map<number, string>();
-		let sawBaseThinking = false;
+		// M3's `reasoning_content` field is truncated; the full reasoning
+		// arrives inline in content as `<think>…</think>`. Skip base
+		// thinking_* events entirely and trust the inline copy.
 		let segment: ThinkingSegment | undefined;
 
 		const ensureOutput = (partial: AssistantMessage): AssistantMessage => {
@@ -171,7 +171,6 @@ function cleanStream(base: AssistantMessageEventStream): AssistantMessageEventSt
 			const block: ThinkingContent = { type: "thinking", thinking: "" };
 			output!.content.push(block);
 			segment = { block, index: output!.content.length - 1, open: true, text: "" };
-			baseThinkingAccs.clear();
 			out.push({ type: "thinking_start", contentIndex: segment.index, partial: output! });
 			return segment;
 		};
@@ -206,33 +205,9 @@ function cleanStream(base: AssistantMessageEventStream): AssistantMessageEventSt
 			out.push({ type: "thinking_delta", contentIndex: seg.index, delta, partial: output });
 		};
 
-		/**
-		 * Thinking from a base thinking block. M3 re-streams the same
-		 * reasoning when the driver switches reasoning fields, so emit only
-		 * the part that extends what the current segment already holds.
-		 */
-		const pushBaseThinking = (contentIndex: number, delta: string) => {
-			const acc = (baseThinkingAccs.get(contentIndex) ?? "") + delta;
-			baseThinkingAccs.set(contentIndex, acc);
-			const seg = segment?.open ? segment : undefined;
-			const have = seg?.text ?? "";
-			const norm = acc.replace(/^\s+/, "");
-			if (norm.length <= have.length) {
-				// Duplicate prefix of what we already emitted → suppress.
-				if (have.startsWith(norm)) return;
-				appendThinking(delta);
-			} else if (norm.startsWith(have)) {
-				appendThinking(norm.slice(have.length));
-			} else {
-				appendThinking(delta);
-			}
-		};
-
 		/** Thinking recovered from inline `<think>…</think>` markers. */
 		const pushInlineThinking = (think: string) => {
-			// If the model streams real reasoning fields, the <think> copy is a
-			// duplicate — drop it.
-			if (!think || sawBaseThinking || !output) return;
+			if (!think || !output) return;
 			appendThinking(think);
 		};
 
@@ -259,28 +234,10 @@ function cleanStream(base: AssistantMessageEventStream): AssistantMessageEventSt
 						out.push({ type: "start", partial: output! });
 						break;
 					}
-					case "thinking_start": {
-						sawBaseThinking = true;
-						syncMeta(ev.partial);
-						baseThinkingAccs.set(ev.contentIndex, "");
-						break;
-					}
-					case "thinking_delta": {
-						syncMeta(ev.partial);
-						pushBaseThinking(ev.contentIndex, ev.delta);
-						break;
-					}
+					case "thinking_start":
+					case "thinking_delta":
 					case "thinking_end": {
-						syncMeta(ev.partial);
-						// Don't close the merged segment: the driver may open a
-						// follow-up block that continues the same reasoning. Just
-						// remember the signature for the final block.
-						const baseBlock = ev.partial.content[ev.contentIndex] as
-							| (ThinkingContent & { thinkingSignature?: string })
-							| undefined;
-						if (segment && baseBlock?.type === "thinking" && baseBlock.thinkingSignature) {
-							segment.signature = baseBlock.thinkingSignature;
-						}
+						// M3's reasoning_content is truncated; trust inline.
 						break;
 					}
 					case "text_start": {
